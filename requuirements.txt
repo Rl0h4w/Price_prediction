@@ -1,0 +1,9 @@
+pandas
+numpy
+seaborn
+tensorflow
+scikit-learn
+joblib
+matplotlib
+
+pip install pandas numpy seaborn tensorflow scikit-learn joblib matplotlib

@@ -2,13 +2,21 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import tensorflow as tf
+import os
 from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
+import joblib
 import matplotlib.pyplot as plt
 from sklearn.model_selection import train_test_split
+import re
 
-pd.set_option("display.max_columns", None)
 
 def get_dataframe():
+    """
+    Загружает данные за 2018, 2019 и 2020 годы и объединяет их в один DataFrame.
+
+    Returns:
+        pd.DataFrame: Объединенный DataFrame.
+    """
     df1 = pd.read_csv("data/Данные 2018 год.xlsx - Лист1.csv")
     df2 = pd.read_csv("data/Данные 2019 год.xlsx - Лист1.csv")
     df3 = pd.read_csv("data/Данные 2020 год.xlsx - Лист1.csv")
@@ -16,64 +24,71 @@ def get_dataframe():
     return df
 
 def preprocess(df):
-    df['Дата'] = pd.to_datetime(df['Дата'])
-    df["День недели"] = df['Дата'].dt.weekday
-    df["Номер месяца"] = df["Дата"].dt.month
-    df["Дата"] = df["Дата"].astype(int)//10**9
-    del df["ЦЗ"]
-    mean_of_price = df["Цена продажи, руб./МВт*ч"].mean()
-    df["Цена продажи, руб./МВт*ч"] = df["Цена продажи, руб./МВт*ч"].apply(lambda x: x if x >=300 and x <= 2500 else mean_of_price)
-    df["Наличие АЭС"] = df["План АЭС, МВт*ч"].apply(lambda x: 1 if x!= 0 else 0)
-    df["Наличие ГЭС"] = df["План ГЭС, МВт*ч"].apply(lambda x: 1 if x!= 0 else 0)
-    df["Наличие ТЭС"] = df["План ТЭС, МВт*ч"].apply(lambda x: 1 if x!= 0 else 0)
-    df["Наличие потребления"] = df["Потребление, МВт*ч"].apply(lambda x: 1 if x!= 0 else 0)
-    df["Наличие экспорта"] = df["Экспорт, МВт*ч"].apply(lambda x: 1 if x!= 0 else 0)
-    df["Наличие импорта"] = df["Импорт, МВт*ч"].apply(lambda x: 1 if x!= 0 else 0)
-    
-    scaler_dict = dict()
-    for column_name in df.keys():
-        if column_name in ["План ВИЭ, МВт*ч",  "Номер месяца", "День недели", "Час", "Дата","Ценопринимающее предложение, МВт*ч", "Ценопринимание сверх минимальной мощности, МВт*ч", "Цена продажи, руб./МВт*ч"]:
-            scaler = StandardScaler()
-            df[column_name] = scaler.fit_transform(df[column_name].values.reshape(-1, 1))
-            scaler_dict[column_name] = scaler
-        elif column_name =="ЗСП":
-            scaler = LabelEncoder()
-            df[column_name] = scaler.fit_transform(df[column_name])
-            scaler_dict[column_name] = scaler
-        elif column_name in ["Наличие АЭС", "Наличие ГЭС", "Наличие ТЭС", "Наличие потребления", "Наличие экспорта", "Наличие импорта"]:
-            continue
-        else:
-            scaler = MinMaxScaler()
-            df[column_name] = scaler.fit_transform(df[column_name].values.reshape(-1, 1))
-            scaler_dict[column_name] = scaler
-    return df, scaler_dict["Цена продажи, руб./МВт*ч"]
-        
-def split(df, size_of_train):
-    days = np.split(df, len(df)//360)
-    x = []
-    y = []
-    for i in range(len(days)-(size_of_train+30)):
-        x_i = np.array(list(map(lambda x: x.to_numpy(), days[i:i+size_of_train])))
-        y_i = np.array(list(map(lambda x: x.mean(), map(lambda x: np.array(x["Цена продажи, руб./МВт*ч"]), days[i+size_of_train:i+size_of_train+30]))))
-        x.append(x_i)
-        y.append(y_i)
-    x = np.array(x)
-    x = x.reshape((x.shape[0], x.shape[1]*x.shape[2], x.shape[3]))
-    y = np.array(y)
-    return x, y
+    """
+    Выполняет предварительную обработку данных.
 
-def get_model(shape):
-    inputs = tf.keras.layers.Input(shape=shape[1:])
-    x = tf.keras.layers.LSTM(256, return_sequences=True)(inputs)
-    x = tf.keras.layers.LSTM(128, return_sequences=True)(x)
-    x = tf.keras.layers.LSTM(64)(x)
-    outputs = tf.keras.layers.Dense(30)(x)
-    model = tf.keras.models.Model(inputs=inputs, outputs=outputs)
-    model.compile(optimizer=tf.keras.optimizers.Adam(0.001), loss = "mse", metrics=["mae", "mse"])
-    return model
+    Args:
+        df (pd.DataFrame): Исходный DataFrame.
+
+    Returns:
+        pd.DataFrame: Обработанный DataFrame.
+    """
+    df['Дата'] = pd.to_datetime(df['Дата'])
+    df['Год'] = df['Дата'].dt.year
+    df['Месяц'] = df['Дата'].dt.month
+    df['День'] = df['Дата'].dt.day
+    df['Час'] = df['Дата'].dt.hour
+    df['ДН'] = df['Дата'].dt.weekday
+    
+    df['Месяц_sin'] = np.sin(2 * np.pi * df['Месяц'] / 12)
+    df['Месяц_cos'] = np.cos(2 * np.pi * df['Месяц'] / 12)
+    df['День_sin'] = np.sin(2 * np.pi * df['День'] / 31)
+    df['День_cos'] = np.cos(2 * np.pi * df['День'] / 31)
+    df['Час_sin'] = np.sin(2 * np.pi * df['Час'] / 24)
+    df['Час_cos'] = np.cos(2 * np.pi * df['Час'] / 24)
+    df['ДН_sin'] = np.sin(2 * np.pi * df['ДН'] / 7)
+    df['ДН_cos'] = np.cos(2 * np.pi * df['ДН'] / 7)
+    
+    df.drop(['Год', 'Месяц', 'День', 'Час', 'ДН'], axis=1, inplace=True)
+    
+    del df["Дата"]
+    del df["ЦЗ"]
+    return df
+
+def split(df, size_of_train=30):
+    """
+    Разбивает данные на обучающую и тестовую выборки.
+
+    Args:
+        df (pd.DataFrame): Исходный DataFrame.
+        size_of_train (int): Размер обучающей выборки в днях.
+
+    Returns:
+        tuple: Кортеж из обучающих и тестовых выборок (x, y).
+    """
+    rows_per_day = 360
+    days_per_month = size_of_train
+    rows_per_month = rows_per_day * days_per_month
+    n_full_months = len(df) // rows_per_month
+    df = df.iloc[:n_full_months * rows_per_month]
+    monthly_splits = np.array_split(df, n_full_months)
+    
+    x = np.array([month.to_numpy() for month in monthly_splits])[:-1]
+    y = np.array([[day_chunk["Цена продажи, руб./МВт*ч"].mean() for day_chunk in np.array_split(month, days_per_month)] for month in monthly_splits])[1:]
+    
+    x = x.reshape((n_full_months - 1, rows_per_month, df.shape[1]))
+    y = y.reshape((n_full_months - 1, days_per_month))
+    
+    return x, y
 
 
 def show_history(history):
+    """
+    Отображает график потерь во время обучения и валидации модели.
+
+    Args:
+        history (History): История обучения модели.
+    """
     train_loss = history.history['loss']
     val_loss = history.history['val_loss']
     epochs = range(1, len(train_loss) + 1)
@@ -86,26 +101,147 @@ def show_history(history):
     plt.show()
 
 def show_dists(df):
+    """
+    Отображает распределения всех признаков в DataFrame.
+
+    Args:
+        df (pd.DataFrame): Исходный DataFrame.
+    """
     for column in df.columns:
         sns.histplot(data=df, x=column)
         plt.show()
-    
-if __name__ == "__main__":
-    df = get_dataframe()
-    df, scaler = preprocess(df)
-    x, y = split(df, size_of_train=30)
-    # x_train, x_val, y_train, y_val = train_test_split(x, y, test_size=0.2, random_state=42)
-    # model = get_model(x_train.shape)
-    # callbacks = [tf.keras.callbacks.ModelCheckpoint("lstm_model_val_mae:{val_mae:.4f}.keras", save_best_only=True, monitor="val_mae"), tf.keras.callbacks.EarlyStopping(monitor='val_mae', patience=10)]
-    # history = model.fit(x=x_train, y=y_train, validation_data=[x_val, y_val], callbacks=callbacks, epochs = 100, shuffle=True)
-    # show_history(history)
-    model = tf.keras.models.load_model("lstm_model_val_mae_0.1597.keras") #input_shape = (None, 10800, 25) 
-    predict_data = df.iloc[-360*30:].to_numpy()  # shape = (10800, 25)
-    predict_data = np.expand_dims(predict_data, axis=0)
-    raw_result = model.predict(predict_data)
-    result = scaler.inverse_transform(raw_result)
-    sns.lineplot(x=range(1, 31), y=result.flatten())
-    plt.show()
-    
-    
 
+def get_model(shape):
+    """
+    Создает и компилирует модель LSTM.
+
+    Args:
+        shape (tuple): Форма входных данных.
+
+    Returns:
+        Model: Скомпилированная модель LSTM.
+    """
+    inputs = tf.keras.layers.Input(shape=shape[1:])
+
+#     x = tf.keras.layers.LSTM(512, return_sequences=True)(inputs)
+#     x = tf.keras.layers.Dropout(0.5)(x)
+    
+#     x = tf.keras.layers.LSTM(256, return_sequences=True)(inputs)
+#     x = tf.keras.layers.Dropout(0.5)(x)
+    
+    x = tf.keras.layers.LSTM(128)(inputs)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    
+    x = tf.keras.layers.Dense(64, activation='relu')(x)
+    x = tf.keras.layers.Dropout(0.5)(x)
+    
+    outputs = tf.keras.layers.Dense(30)(x)
+    
+    model = tf.keras.models.Model(inputs=inputs, outputs=outputs)
+    
+    model.compile(optimizer=tf.keras.optimizers.Adam(0.001), loss="mse", metrics=["mae", "mse"])
+    
+    return model
+
+def train_model():
+    """
+    Обучает модель на данных.
+    """
+    strategy = tf.distribute.MirroredStrategy()
+    with strategy.scope():
+        df = get_dataframe()
+        df = preprocess(df)
+        
+        label_encoder = LabelEncoder()
+        df["ЗСП"] = label_encoder.fit_transform(df["ЗСП"])
+        
+        x, y = split(df, 30)
+        x_train, x_test, y_train, y_test = train_test_split(x, y, test_size=0.2, random_state=42)
+        
+        scaler_x = StandardScaler()
+        scaler_y = MinMaxScaler()
+
+        x_train_shape = x_train.shape
+        x_test_shape = x_test.shape
+        y_train_shape = y_train.shape
+        y_test_shape = y_test.shape
+
+        x_train = x_train.reshape(-1, x_train_shape[-1])
+        x_test = x_test.reshape(-1, x_test_shape[-1])
+        
+        y_train = y_train.reshape(-1, 1)
+        y_test = y_test.reshape(-1, 1)
+
+        x_train = scaler_x.fit_transform(x_train).reshape(x_train_shape)
+        x_test = scaler_x.transform(x_test).reshape(x_test_shape)
+
+        y_train = scaler_y.fit_transform(y_train).reshape(y_train_shape[0], y_train_shape[1])
+        y_test = scaler_y.transform(y_test).reshape(y_test_shape[0], y_test_shape[1])
+
+        joblib.dump(scaler_x, "scaler_x.pkl")
+        joblib.dump(scaler_y, "scaler_y.pkl")
+        joblib.dump(label_encoder, "label_encoder.pkl")
+        model = get_model(x_train.shape)
+        callbacks = [tf.keras.callbacks.ModelCheckpoint("lstm_model_loss:{val_loss:.3f}_mae:{val_mae:.3f}.keras", save_best_only=True, monitor="val_loss"),
+            tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=40, restore_best_weights=True),
+                    ]
+        history = model.fit(x=x_train, y=y_train, validation_data=(x_test, y_test), callbacks=callbacks, epochs=200, shuffle=True)
+        show_history(history)
+
+
+def get_best_model():
+    """
+    Загружает лучшую сохраненную модель на основе наименьшей валидационной потери и MAE.
+
+    Returns:
+        Model: Лучшая модель.
+    """
+    model_dir = "/"
+    model_files = [f for f in os.listdir(model_dir) if f.endswith(".keras")]
+    
+    pattern = r"lstm_model_loss:(\d+\.\d+)_mae:(\d+\.\d+).keras"
+    models_info = []
+    
+    for file in model_files:
+        
+        match = re.match(pattern, file)
+        
+        if match:
+            val_loss = float(match.group(1))
+            val_mae = float(match.group(2))
+            models_info.append((val_loss, val_mae, file))
+            
+    if not models_info:
+        raise ValueError("Не найдены файлы моделей, соответствующие шаблону.")
+    
+    models_info.sort(key=lambda x: (x[0], x[1]))
+
+    best_model_file = models_info[0][2]
+    best_model_path = os.path.join(model_dir, best_model_file)
+
+    best_model = tf.keras.models.load_model(best_model_path)
+    print(f"""Best model: val_loss: {models_info[0][0]}, val_mae: {models_info[0][1]}""")
+    return best_model
+
+        
+if __name__=="__main__":
+    try:
+        model = get_best_model()
+    except ValueError:
+        train_model()
+        model = get_best_model()
+    scaler_x = joblib.load("scaler_x.pkl")
+    scaler_y = joblib.load("scaler_y.pkl")
+    label_encoder = joblib.load("label_encoder.pkl")
+    
+    data_to_prediction = get_dataframe()
+    data_to_prediction["ЗСП"] = label_encoder.transform(data_to_prediction["ЗСП"])
+    data_to_prediction = preprocess(data_to_prediction)[-360*30:]
+    
+    data_to_prediction = scaler_x.transform(data_to_prediction.to_numpy())
+    data_to_prediction = data_to_prediction.reshape(1, 10800, 23)
+    
+    predicted_price = model.predict(data_to_prediction)
+    predicted_price = scaler_y.inverse_transform(predicted_price)
+    
+    sns.lineplot(predicted_price[0])
